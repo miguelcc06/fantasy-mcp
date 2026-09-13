@@ -702,6 +702,7 @@ def register_tools(mcp: FastMCP) -> None:
                     label = f"{owner} (venta)" if owner else "Venta rival"
                 else:
                     label = owner or "Libre"
+                num_bids = as_int(item.get("numberOfBids")) if item.get("numberOfBids") is not None else None
                 rows.append(
                     {
                         "player": player_name(item),
@@ -710,6 +711,7 @@ def register_tools(mcp: FastMCP) -> None:
                         "listing": listing,
                         "label": label,
                         "price": as_money(item.get("salePrice") or item.get("price") or master.get("marketValue")),
+                        "numberOfBids": num_bids,
                         "bid": (item.get("bid") or {}).get("money") if isinstance(item.get("bid"), dict) else None,
                         "discr": item.get("discr"),
                         "playerTeamId": market_player_team_id(item),
@@ -717,8 +719,13 @@ def register_tools(mcp: FastMCP) -> None:
                 )
             lines = [f"# Mercado (liga {league_id})", ""]
             for row in rows:
-                bid = f" · puja {format_money(row['bid'])}" if row.get("bid") else ""
-                lines.append(f"- {row['player']} · {format_money(row['price'])} · {row['label']}{bid}")
+                bids_txt = ""
+                if row.get("numberOfBids") is not None:
+                    count = row["numberOfBids"]
+                    noun = "puja" if count == 1 else "pujas"
+                    bids_txt = f" · {count} {noun}"
+                bid = f" (tu puja: {format_money(row['bid'])})" if row.get("bid") else ""
+                lines.append(f"- {row['player']} · {format_money(row['price'])} · {row['label']}{bids_txt}{bid}")
             return emit({"leagueId": league_id, "items": rows}, params.response_format, "\n".join(lines) or "Mercado vacío.")
         except Exception as exc:
             return _error(exc)
@@ -928,6 +935,7 @@ def register_tools(mcp: FastMCP) -> None:
                 price = as_money(
                     listing.get("salePrice") or listing.get("price") or (listing.get("playerMaster") or {}).get("marketValue")
                 )
+                num_bids = as_int(listing.get("numberOfBids")) if listing.get("numberOfBids") is not None else None
                 bid = (listing.get("bid") or {}).get("money") if isinstance(listing.get("bid"), dict) else None
                 name = player_name(listing)
                 if kind == "free":
@@ -936,16 +944,21 @@ def register_tools(mcp: FastMCP) -> None:
                         "playerId": player_id(listing),
                         "listing": "free",
                         "price": price,
+                        "numberOfBids": num_bids,
                         "bid": bid,
                         "offers": [],
                     }
-                    bid_txt = f"\n- Puja visible: {format_money(bid)}" if bid else "\n- Sin pujas visibles"
+                    bids_line = ""
+                    if num_bids is not None:
+                        noun = "puja activa" if num_bids == 1 else "pujas activas"
+                        bids_line = f"\n- Pujas en mercado: {num_bids} {noun}"
+                    bid_txt = f"\n- Tu puja: {format_money(bid)}" if bid else ""
                     return emit(
                         payload,
                         params.response_format,
                         f"# {name} está libre en el mercado\n\n"
                         "No tiene playerTeamId: las pujas de bolsa no se consultan por este endpoint.\n"
-                        f"- Precio: {format_money(price)}{bid_txt}",
+                        f"- Precio: {format_money(price)}{bids_line}{bid_txt}",
                     )
                 ptid = market_player_team_id(listing)
                 if not ptid:
