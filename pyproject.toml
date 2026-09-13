@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laliga-fantasy-mcp"
+version = "0.1.0"
+description = "Servidor MCP de solo lectura para LaLiga Fantasy"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "laliga_fantasy_mcp" }]
+dependencies = [
+  "mcp>=1.21,<2",
+  "httpx>=0.27",
+  "pydantic>=2.6",
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pyright>=1.1", "pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+laliga-fantasy-mcp = "laliga_fantasy_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+laliga_fantasy_mcp = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

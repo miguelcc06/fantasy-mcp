@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>Using only the LaLiga Fantasy MCP tools, how many starters does FútbolFantasy currently list in the probable lineup of Real Madrid? Answer with a single integer.</question>
+    <answer>11</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the official starting budget in euros that every manager receives at the beginning of a LaLiga Fantasy private league, as used by the rival-balance calculation?</question>
+    <answer>100000000</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>When estimating how much cash a manager can still bid, what percentage of the squad market value is added to the cash balance (the same rule LaLigaApp uses)? Answer with the integer percentage.</question>
+    <answer>20</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many read-only tools does the laliga_fantasy_mcp server expose? Answer with a single integer.</question>
+    <answer>19</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What competition id does the MCP use for Primera División on fantasy-api.llt-services.com in season 26/27? Answer with the numeric id.</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Call the injuries tool. Facundo Garcés of Alavés is listed with a long-term ACL injury. What status label does the tool assign to him (injured, doubt, suspended, or available)?</question>
+    <answer>injured</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the exact FastMCP server name registered by this project?</question>
+    <answer>laliga_fantasy_mcp</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Which environment variable must hold the Azure AD B2C refresh token so OpenClaw can renew the session with no login UI?</question>
+    <answer>LALIGA_FANTASY_REFRESH_TOKEN</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>From the probable-lineups tool, what is the data source domain reported for Real Madrid's lineup?</question>
+    <answer>futbolfantasy.com</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The market-trends scraper reads FútbolFantasy analytics. What filter value do you pass to laliga_get_market_trends to keep only players whose daily value change is negative?</question>
+    <answer>falling</answer>
+  </qa_pair>
+</evaluation>

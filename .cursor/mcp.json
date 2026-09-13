@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "laliga_fantasy": {
+      "command": "e:\\Proyectos\\mcp_la_liga_fantasy\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "laliga_fantasy_mcp"],
+      "cwd": "e:\\Proyectos\\mcp_la_liga_fantasy"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+# Secrets and local session
+.env
+.env.*
+!.env.example
+
+# Packaged Electron app (not source; may contain caches)
+LaLigaApp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+*.swp
+.idea/
+.vscode/
+.agents/
+
+# Validation / probe artifacts
+scripts/_*
+scripts/_ff_madrid.html
