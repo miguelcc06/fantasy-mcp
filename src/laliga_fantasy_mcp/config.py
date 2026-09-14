@@ -48,6 +48,12 @@ WEEK_NUMBER_MAX = 42
 FF_LINEUP_URL = "https://www.futbolfantasy.com/laliga/equipos/{slug}"
 FF_INJURIES_URL = "https://www.futbolfantasy.com/laliga/lesionados"
 FF_TRENDS_URL = "https://www.futbolfantasy.com/analytics/laliga-fantasy/mercado"
+FF_STANDINGS_URL = "https://www.futbolfantasy.com/laliga/clasificacion"
+FF_SANCTIONS_URL = "https://www.futbolfantasy.com/laliga/sancionados"
+FF_APERCIBIDOS_URL = "https://www.futbolfantasy.com/laliga/apercibidos"
+STANDINGS_CACHE_SECONDS = 30 * 60
+SET_PIECES_CACHE_SECONDS = 60 * 60
+SANCTIONS_CACHE_SECONDS = 30 * 60
 
 LALIGA_TEAMS: dict[str, dict[str, str]] = {
     "alaves": {"name": "Alavés", "fullName": "Deportivo Alavés"},

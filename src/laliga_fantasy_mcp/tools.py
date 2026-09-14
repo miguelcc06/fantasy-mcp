@@ -33,9 +33,14 @@ from laliga_fantasy_mcp.models.schemas import (
     OwnershipInput,
     PlayerOffersInput,
     PlayerQueryInput,
+    RealStandingsInput,
     ResponseFormat,
     RivalsInput,
+    SanctionsInput,
     SearchPlayersInput,
+    SetLineupInput,
+    SetPieceTakersInput,
+    SquadAggregateStatsInput,
     TrendsInput,
     WeekInput,
 )
@@ -86,6 +91,19 @@ READ_ONLY = {
 
 def _ann(title: str) -> dict[str, Any]:
     return {**READ_ONLY, "title": title}
+
+
+WRITE_ACTION = {
+    "title": "",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
+
+
+def _ann_write(title: str) -> dict[str, Any]:
+    return {**WRITE_ACTION, "title": title}
 
 
 def _field_constraints(field: Any) -> dict[str, Any]:
@@ -1245,24 +1263,410 @@ def register_tools(mcp: FastMCP) -> None:
         except Exception as exc:
             return _error(exc)
 
-    @mcp.tool(name="laliga_get_injuries", annotations=_ann("Lesionados y sanciones"))
-    @flatten(EmptyInput)
-    async def laliga_get_injuries(params: EmptyInput) -> str:
-        """Bajas, dudas y disponibles según FútbolFantasy.
+    @mcp.tool(name="laliga_get_real_standings_and_form", annotations=_ann("Clasificación oficial y forma"))
+    @flatten(RealStandingsInput)
+    async def laliga_get_real_standings_and_form(params: RealStandingsInput) -> str:
+        """Obtiene la clasificación oficial de LaLiga EA Sports en tiempo real con estadísticas y racha.
+
+        Incluye posición, puntos, PJ, PG, PE, PP, GF, GC, DG, desglose local/visitante y los últimos 5 partidos.
 
         Args:
-            params (EmptyInput): response_format.
+            params (RealStandingsInput): response_format.
 
         Returns:
-            str: Listado de estados físicos.
+            str: Tabla/resumen con clasificación y forma.
         """
         try:
-            rows = await ff().injuries()
-            lines = ["# Lesionados y dudas (FútbolFantasy)", ""]
-            for row in rows[:80]:
-                pct = f" · {row['probability']}%" if row.get("probability") is not None else ""
-                lines.append(f"- {row['name']} · {row['status']}{pct} · {row['detail'][:120]}")
-            return emit({"players": rows}, params.response_format, "\n".join(lines) if rows else "Sin datos de bajas.")
+            rows = await ff().real_standings()
+            if not rows:
+                return "No se pudieron obtener los datos de clasificación oficial."
+            lines = [
+                "# Clasificación Oficial LaLiga EA Sports y Forma",
+                "",
+                "Pos | Equipo | Pts | PJ | PG | PE | PP | GF | GC | DG | Casa (Pts/PJ) | Fuera (Pts/PJ) | Racha (últ. 5)",
+                "---|---|---|---|---|---|---|---|---|---|---|---|---",
+            ]
+            for r in rows:
+                tot = r.get("total") or {}
+                hm = r.get("home") or {}
+                aw = r.get("away") or {}
+                dg_str = f"+{tot.get('goalDifference')}" if (tot.get("goalDifference") or 0) > 0 else str(tot.get("goalDifference") or 0)
+                form_str = r.get("formString") or "n/d"
+                lines.append(
+                    f"{r['position']} | {r['team']} | **{tot.get('points', 0)}** | {tot.get('played', 0)} | "
+                    f"{tot.get('won', 0)} | {tot.get('drawn', 0)} | {tot.get('lost', 0)} | "
+                    f"{tot.get('goalsFor', 0)} | {tot.get('goalsAgainst', 0)} | {dg_str} | "
+                    f"{hm.get('points', 0)}p ({hm.get('played', 0)}PJ) | {aw.get('points', 0)}p ({aw.get('played', 0)}PJ) | {form_str}"
+                )
+            return emit({"standings": rows}, params.response_format, "\n".join(lines))
+        except Exception as exc:
+            return _error(exc)
+
+    @mcp.tool(name="laliga_get_set_piece_takers", annotations=_ann("Lanzadores a balón parado"))
+    @flatten(SetPieceTakersInput)
+    async def laliga_get_set_piece_takers(params: SetPieceTakersInput) -> str:
+        """Lista la jerarquía de lanzadores a balón parado (1º, 2º y 3º) por equipo de LaLiga.
+
+        Incluye penaltis, faltas directas, faltas indirectas/colgadas y saques de esquina.
+
+        Args:
+            params (SetPieceTakersInput): team (slug o nombre del equipo) y response_format.
+
+        Returns:
+            str: Especialistas y lanzadores por club.
+        """
+        try:
+            slugs: list[str] | None = None
+            if params.team:
+                slug = _team_slug(params.team)
+                if not slug:
+                    return f"No reconozco el equipo '{params.team}'. Usa el slug o nombre del equipo."
+                if not is_current_laliga_slug(slug):
+                    return _team_not_in_season_message(slug)
+                slugs = [slug]
+            else:
+                slugs = await _slugs_from_calendar()
+
+            teams_data = await ff().all_set_pieces(slugs)
+            lines = ["# Especialistas a Balón Parado (LaLiga)", ""]
+            for item in teams_data:
+                team_name = item.get("fullName") or item.get("team") or item.get("slug")
+                if item.get("error"):
+                    lines.append(f"## {team_name}\n- Error: {item['error']}\n")
+                    continue
+                lines.append(f"## {team_name}")
+                p = ", ".join(item.get("penalties") or []) or "Sin especialistas destacados"
+                fd = ", ".join(item.get("directFouls") or []) or "Sin especialistas destacados"
+                fc = ", ".join(item.get("indirectFouls") or []) or "Sin especialistas destacados"
+                c = ", ".join(item.get("corners") or []) or "Sin especialistas destacados"
+                lines.append(f"- **Penaltis:** {p}")
+                lines.append(f"- **Faltas Directas:** {fd}")
+                lines.append(f"- **Faltas Indirectas / Colgadas:** {fc}")
+                lines.append(f"- **Córners:** {c}")
+                lines.append("")
+            return emit({"teams": teams_data}, params.response_format, "\n".join(lines).strip())
+        except Exception as exc:
+            return _error(exc)
+
+    @mcp.tool(name="laliga_get_sanctions_and_cards", annotations=_ann("Sanciones y apercibidos"))
+    @flatten(SanctionsInput)
+    async def laliga_get_sanctions_and_cards(params: SanctionsInput) -> str:
+        """Lista jugadores sancionados federativamente (rojas, acumulación) y apercibidos (4 amarillas).
+
+        Args:
+            params (SanctionsInput): team opcional y response_format.
+
+        Returns:
+            str: Jugadores sancionados y apercibidos para la próxima jornada.
+        """
+        try:
+            data = await ff().sanctions_and_cards()
+            sanctioned = data.get("sanctioned") or []
+            warned = data.get("warned") or []
+
+            if params.team:
+                q = fold(params.team)
+                sanctioned = [s for s in sanctioned if q in fold(str(s.get("team") or "")) or q in fold(str(s.get("name") or ""))]
+                warned = [w for w in warned if q in fold(str(w.get("team") or "")) or q in fold(str(w.get("name") or ""))]
+
+            lines = ["# Sanciones y Tarjetas (LaLiga)", "", "## Jugadores Sancionados"]
+            if not sanctioned:
+                lines.append("- No hay jugadores sancionados registrados actualmente.")
+            for s in sanctioned:
+                tm = f" ({s['team']})" if s.get("team") else ""
+                lines.append(f"- **{s['name']}**{tm}: {s.get('reason', 'Sancionado')}")
+
+            lines.extend(["", "## Jugadores Apercibidos (4 amarillas)"])
+            if not warned:
+                lines.append("- No hay jugadores apercibidos registrados actualmente.")
+            for w in warned:
+                tm = f" ({w['team']})" if w.get("team") else ""
+                lines.append(f"- **{w['name']}**{tm}: {w.get('reason', 'Apercibido')}")
+
+            payload = {
+                "sanctioned": sanctioned,
+                "warned": warned,
+                "totalSanctioned": len(sanctioned),
+                "totalWarned": len(warned),
+            }
+            return emit(payload, params.response_format, "\n".join(lines))
+        except Exception as exc:
+            return _error(exc)
+
+    @mcp.tool(name="laliga_get_squad_aggregate_stats", annotations=_ann("Estadísticas agregadas de plantilla"))
+    @flatten(SquadAggregateStatsInput)
+    async def laliga_get_squad_aggregate_stats(params: SquadAggregateStatsInput) -> str:
+        """Devuelve en una sola llamada un resumen estadístico agregado de todos los jugadores de la plantilla del usuario o un rival.
+
+        Calcula puntos totales, media de puntos en casa vs fuera, titularidades/suplencias, minutos promediados y tendencia de valor de los últimos 7 días.
+
+        Args:
+            params (SquadAggregateStatsInput): team_or_manager ('me' o rival) y response_format.
+
+        Returns:
+            str: Resumen estadístico integral por jugador.
+        """
+        try:
+            client = api()
+            ctx = LeagueContext(client)
+            league_id = await ctx.league_id(params.league_id)
+            query = params.team_or_manager or "me"
+            if fold(query) in {"me", "yo", "mi equipo"}:
+                tid = await ctx.my_team_id(league_id)
+                label = "Tu equipo"
+            else:
+                entry = await ctx.find_team(league_id, query)
+                tid = team_id_from(entry) or ""
+                label = manager_name(entry)
+
+            teams_master = await ctx.teams_master()
+            team_data = await client.team(league_id, tid)
+            players_raw = _players_from_team(team_data)
+            if not players_raw:
+                return f"No se encontraron jugadores en la plantilla de {label}."
+
+            async def _analyze_player(p_item: dict[str, Any]) -> dict[str, Any]:
+                pm = p_item.get("playerMaster") if isinstance(p_item.get("playerMaster"), dict) else p_item
+                pid = str(pm.get("id") or p_item.get("id") or "")
+                name = pm.get("name") or p_item.get("name") or "Jugador"
+                pos_id = position_id(pm.get("positionId") or p_item.get("positionId"))
+                pos_name = POSITION_NAMES.get(pos_id or 0, "?")
+                mv = as_int(p_item.get("marketValue") or pm.get("marketValue"))
+                pts = as_int(pm.get("points") or p_item.get("points"))
+                avg_pts = float(pm.get("averagePoints") or 0.0)
+
+                # Enrich with player details and market value history
+                det_coro = client.player_details(pid, league_id) if pid else asyncio.sleep(0, result={})
+                mv_coro = client.player_market_value(pid) if pid else asyncio.sleep(0, result=[])
+                det, mv_hist = await asyncio.gather(det_coro, mv_coro, return_exceptions=True)
+
+                det_dict = det if isinstance(det, dict) else {}
+                pm_det = det_dict.get("playerMaster") or {}
+                last_stats = pm_det.get("lastStats") or pm.get("lastStats") or []
+
+                # Analyze matches home vs away, minutes, starts
+                home_pts: list[int] = []
+                away_pts: list[int] = []
+                starts = 0
+                sub_appearances = 0
+                total_mins = 0
+                games_played = 0
+
+                if isinstance(last_stats, list):
+                    for st_item in last_stats:
+                        if not isinstance(st_item, dict):
+                            continue
+                        pts_w = as_int(st_item.get("totalPoints"))
+                        loc_vis = st_item.get("locvis") or st_item.get("homeAway")
+                        is_home = (loc_vis == "home" or loc_vis == "local" or loc_vis == 1) if loc_vis is not None else None
+                        
+                        st_dict = st_item.get("stats") or {}
+                        mins_pair = st_dict.get("mins_played") or [0, 0]
+                        mins = mins_pair[0] if isinstance(mins_pair, list) and mins_pair else as_int(mins_pair)
+                        
+                        if mins > 0 or pts_w != 0:
+                            games_played += 1
+                            total_mins += mins
+                            if mins >= 60 or st_item.get("isStarter") is True:
+                                starts += 1
+                            else:
+                                sub_appearances += 1
+                            if is_home is True:
+                                home_pts.append(pts_w)
+                            elif is_home is False:
+                                away_pts.append(pts_w)
+                            else:
+                                # default split if unknown
+                                home_pts.append(pts_w)
+
+                avg_home = round(sum(home_pts) / len(home_pts), 2) if home_pts else 0.0
+                avg_away = round(sum(away_pts) / len(away_pts), 2) if away_pts else 0.0
+                avg_mins = round(total_mins / games_played, 1) if games_played > 0 else 0.0
+
+                # 7-day market value trend
+                diff_7d = 0
+                if isinstance(mv_hist, list) and len(mv_hist) >= 7:
+                    v_now = as_int(mv_hist[-1].get("marketValue"))
+                    v_old = as_int(mv_hist[-7].get("marketValue"))
+                    diff_7d = v_now - v_old
+                elif isinstance(mv_hist, list) and len(mv_hist) >= 2:
+                    diff_7d = as_int(mv_hist[-1].get("marketValue")) - as_int(mv_hist[0].get("marketValue"))
+
+                return {
+                    "id": pid,
+                    "name": name,
+                    "position": pos_name,
+                    "positionId": pos_id,
+                    "marketValue": mv,
+                    "valueTrend7d": diff_7d,
+                    "totalPoints": pts,
+                    "averagePoints": avg_pts,
+                    "avgHomePoints": avg_home,
+                    "avgAwayPoints": avg_away,
+                    "gamesPlayed": games_played,
+                    "starts": starts,
+                    "substitutions": sub_appearances,
+                    "averageMinutes": avg_mins,
+                    "status": pick_player_status(p_item),
+                }
+
+            squad_stats = await asyncio.gather(*[_analyze_player(p) for p in players_raw if isinstance(p, dict)])
+            squad_stats.sort(key=lambda x: x["totalPoints"], reverse=True)
+
+            lines = [
+                f"# Estadísticas Agregadas de Plantilla — {label}",
+                "",
+                "Jugador | Pos | Pts | Media | Casa / Fuera | Tit / Sup | Min/P | Valor | Tendencia 7d | Estado",
+                "---|---|---|---|---|---|---|---|---|---",
+            ]
+            for s in squad_stats:
+                sign = "+" if s["valueTrend7d"] > 0 else ""
+                trend_txt = f"{sign}{format_money(s['valueTrend7d'])}" if s["valueTrend7d"] != 0 else "="
+                lines.append(
+                    f"{s['name']} | {s['position']} | **{s['totalPoints']}** | {s['averagePoints']} | "
+                    f"{s['avgHomePoints']} / {s['avgAwayPoints']} | {s['starts']}T / {s['substitutions']}S | "
+                    f"{s['averageMinutes']}' | {format_money(s['marketValue'])} | {trend_txt} | {s['status']}"
+                )
+
+            payload = {
+                "manager": label,
+                "teamId": tid,
+                "leagueId": league_id,
+                "playerCount": len(squad_stats),
+                "players": squad_stats,
+            }
+            return emit(payload, params.response_format, "\n".join(lines))
+        except Exception as exc:
+            return _error(exc)
+
+    @mcp.tool(name="laliga_set_lineup", annotations=_ann_write("Modificar alineación"))
+    @flatten(SetLineupInput)
+    async def laliga_set_lineup(params: SetLineupInput) -> str:
+        """Modifica la alineación activa del usuario (formación táctica, 11 titulares, capitán y suplentes).
+
+        Valida la formación legal, resuelve los IDs de jugadores y actualiza el XI activo en LaLiga Fantasy.
+
+        Args:
+            params (SetLineupInput): formation ('3-5-2', '4-4-2'), starters (11 IDs/nombres), captain_id y bench opcionales.
+
+        Returns:
+            str: Resultado de la operación de alineación.
+        """
+        try:
+            client = api()
+            ctx = LeagueContext(client)
+            league_id = await ctx.league_id(params.league_id)
+            team_id = await ctx.my_team_id(league_id)
+            
+            # 1. Fetch own team and verify ownership of players
+            team_data = await client.team(league_id, team_id)
+            roster = _players_from_team(team_data)
+            roster_by_id = {}
+            roster_by_name = {}
+            for p in roster:
+                if not isinstance(p, dict):
+                    continue
+                pm = p.get("playerMaster") if isinstance(p.get("playerMaster"), dict) else p
+                pid = str(pm.get("id") or p.get("id") or "")
+                ptid = str(p.get("playerTeamId") or "")
+                pname = fold(pm.get("name") or p.get("name") or "")
+                pnick = fold(pm.get("nickname") or p.get("nickname") or "")
+                entry = {"player": p, "id": pid, "playerTeamId": ptid, "name": pm.get("name") or p.get("name")}
+                if pid:
+                    roster_by_id[pid] = entry
+                if ptid:
+                    roster_by_id[ptid] = entry
+                if pname:
+                    roster_by_name[pname] = entry
+                if pnick:
+                    roster_by_name[pnick] = entry
+
+            # 2. Resolve the 11 starters
+            resolved_starters = []
+            for item in params.starters:
+                q = str(item).strip()
+                match = roster_by_id.get(q) or roster_by_name.get(fold(q))
+                if not match:
+                    for k, v in roster_by_name.items():
+                        if fold(q) in k:
+                            match = v
+                            break
+                if not match:
+                    return f"Error: El jugador '{q}' no pertenece a tu plantilla."
+                if match in resolved_starters:
+                    return f"Error: El jugador '{match['name']}' está duplicado en los titulares."
+                resolved_starters.append(match)
+
+            if len(resolved_starters) != 11:
+                return f"Error: Se requieren exactamente 11 titulares (recibidos {len(resolved_starters)})."
+
+            # 3. Classify starters by position
+            by_pos: dict[str, list[dict[str, Any]]] = {
+                "goalkeeper": [],
+                "defender": [],
+                "midfield": [],
+                "striker": [],
+            }
+            for entry in resolved_starters:
+                p = entry["player"]
+                pm = p.get("playerMaster") if isinstance(p.get("playerMaster"), dict) else p
+                pos = position_id(pm.get("positionId") or p.get("positionId"))
+                if pos == 1:
+                    by_pos["goalkeeper"].append(entry)
+                elif pos == 2:
+                    by_pos["defender"].append(entry)
+                elif pos == 3:
+                    by_pos["midfield"].append(entry)
+                elif pos == 4:
+                    by_pos["striker"].append(entry)
+
+            # Validate formation counts
+            form_parts = [int(x) for x in params.formation.replace("-", ",").split(",") if x.strip().isdigit()]
+            if len(form_parts) == 3:
+                exp_def, exp_mid, exp_str = form_parts
+            elif len(form_parts) == 4:
+                # e.g. 1-4-4-2
+                exp_def, exp_mid, exp_str = form_parts[1], form_parts[2], form_parts[3]
+            else:
+                return f"Error: Formato de formación inválido '{params.formation}'. Usa ej. '4-4-2' o '3-5-2'."
+
+            if len(by_pos["goalkeeper"]) != 1:
+                return f"Error: La alineación debe contener exactamente 1 portero (tienes {len(by_pos['goalkeeper'])})."
+            if len(by_pos["defender"]) != exp_def:
+                return f"Error: La formación {params.formation} requiere {exp_def} defensas (seleccionados {len(by_pos['defender'])})."
+            if len(by_pos["midfield"]) != exp_mid:
+                return f"Error: La formación {params.formation} requiere {exp_mid} centrocampistas (seleccionados {len(by_pos['midfield'])})."
+            if len(by_pos["striker"]) != exp_str:
+                return f"Error: La formación {params.formation} requiere {exp_str} delanteros (seleccionados {len(by_pos['striker'])})."
+
+            # Build payload
+            tactical_formation = [exp_def, exp_mid, exp_str]
+            formation_payload = {
+                "tacticalFormation": tactical_formation,
+                "goalkeeper": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["goalkeeper"]],
+                "defender": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["defender"]],
+                "midfield": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["midfield"]],
+                "striker": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["striker"]],
+                "coach": [],
+                "bench": {},
+            }
+            if params.captain_id:
+                cap_q = str(params.captain_id).strip()
+                cap_match = roster_by_id.get(cap_q) or roster_by_name.get(fold(cap_q))
+                if cap_match:
+                    formation_payload["captain"] = {"playerTeamId": cap_match["playerTeamId"]}
+
+            payload = {"formation": formation_payload}
+            res = await client.set_lineup(team_id, payload)
+            
+            lines = [
+                f"# Alineación Guardada Exitosamente",
+                f"- Formación: {params.formation}",
+                f"- Titulares ({len(resolved_starters)}): {', '.join(x['name'] for x in resolved_starters)}",
+            ]
+            if params.captain_id:
+                lines.append(f"- Capitán: {params.captain_id}")
+            return emit({"status": "success", "formation": params.formation, "starters": [x["name"] for x in resolved_starters], "raw": res}, params.response_format, "\n".join(lines))
         except Exception as exc:
             return _error(exc)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from typing import Any
@@ -14,6 +15,12 @@ from laliga_fantasy_mcp.config import (
     FF_INJURIES_URL,
     FF_LINEUP_URL,
     FF_SLUG_ALIASES,
+    FF_STANDINGS_URL,
+    FF_SANCTIONS_URL,
+    FF_APERCIBIDOS_URL,
+    STANDINGS_CACHE_SECONDS,
+    SET_PIECES_CACHE_SECONDS,
+    SANCTIONS_CACHE_SECONDS,
     FF_TRENDS_URL,
     HTTP_TIMEOUT,
     INJURY_CACHE_SECONDS,
@@ -37,6 +44,9 @@ class FutbolFantasyClient:
         self._lineup_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._injuries_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._trends_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._standings_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._set_pieces_cache: tuple[float, dict[str, Any]] | None = None
+        self._sanctions_cache: tuple[float, dict[str, list[dict[str, Any]]]] | None = None
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -84,6 +94,48 @@ class FutbolFantasyClient:
         parsed = parse_market_trends(html)
         self._trends_cache = (now, parsed)
         return parsed
+
+    async def real_standings(self) -> list[dict[str, Any]]:
+        now = time.time()
+        if self._standings_cache and now - self._standings_cache[0] < STANDINGS_CACHE_SECONDS:
+            return self._standings_cache[1]
+        html = await self._get_html(FF_STANDINGS_URL)
+        parsed = parse_real_standings_html(html)
+        self._standings_cache = (now, parsed)
+        return parsed
+
+    async def team_set_pieces(self, slug: str) -> dict[str, Any]:
+        ff_slug = FF_SLUG_ALIASES.get(slug, slug)
+        html = await self._get_html(FF_LINEUP_URL.format(slug=ff_slug))
+        return parse_team_set_pieces(html, slug)
+
+    async def all_set_pieces(self, slugs: list[str] | None = None) -> list[dict[str, Any]]:
+        targets = slugs or list(CURRENT_LALIGA_SLUGS)
+        results: list[dict[str, Any]] = []
+        for slug in targets:
+            try:
+                results.append(await self.team_set_pieces(slug))
+            except Exception as exc:
+                results.append({"slug": slug, "error": str(exc), "source": "futbolfantasy.com"})
+        return results
+
+    async def sanctions_and_cards(self) -> dict[str, list[dict[str, Any]]]:
+        now = time.time()
+        if self._sanctions_cache and now - self._sanctions_cache[0] < SANCTIONS_CACHE_SECONDS:
+            return self._sanctions_cache[1]
+        sanc_html, aper_html = await asyncio.gather(
+            self._get_html(FF_SANCTIONS_URL),
+            self._get_html(FF_APERCIBIDOS_URL),
+            return_exceptions=True,
+        )
+        sanctions = parse_sanctions_html(str(sanc_html)) if isinstance(sanc_html, str) else []
+        apercibidos = parse_apercibidos_html(str(aper_html)) if isinstance(aper_html, str) else []
+        data = {
+            "sanctioned": sanctions,
+            "warned": apercibidos,
+        }
+        self._sanctions_cache = (now, data)
+        return data
 
 
 _HEIGHT_RE = re.compile(r"^\d+[.,]\d{2}$")
@@ -338,7 +390,177 @@ def parse_injuries_html(html: str) -> list[dict[str, Any]]:
     return list(unique.values())
 
 
-def parse_market_trends(html: str) -> list[dict[str, Any]]:
+def parse_real_standings_html(html: str) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "lxml")
+    tables = soup.select("table.clasi-comp")
+    if len(tables) < 5:
+        return []
+
+    t_teams = tables[1].select("tr")[1:]
+    t_total = tables[2].select("tr")[1:]
+    t_home = tables[3].select("tr")[1:]
+    t_away = tables[4].select("tr")[1:]
+
+    def _parse_row_stats(row: Any) -> dict[str, int]:
+        cols = [td.get_text(strip=True) for td in row.select("td")]
+        return {
+            "points": int(cols[0]) if len(cols) > 0 and cols[0].lstrip("-+").isdigit() else 0,
+            "played": int(cols[1]) if len(cols) > 1 and cols[1].isdigit() else 0,
+            "won": int(cols[2]) if len(cols) > 2 and cols[2].isdigit() else 0,
+            "drawn": int(cols[3]) if len(cols) > 3 and cols[3].isdigit() else 0,
+            "lost": int(cols[4]) if len(cols) > 4 and cols[4].isdigit() else 0,
+            "goalsFor": int(cols[5]) if len(cols) > 5 and cols[5].isdigit() else 0,
+            "goalsAgainst": int(cols[6]) if len(cols) > 6 and cols[6].isdigit() else 0,
+            "goalDifference": int(cols[7].replace("+", ""))
+            if len(cols) > 7 and cols[7].lstrip("-+").isdigit()
+            else 0,
+        }
+
+    rows: list[dict[str, Any]] = []
+    count = min(len(t_teams), len(t_total), len(t_home), len(t_away))
+    for i in range(count):
+        tr_team = t_teams[i]
+        pos_el = tr_team.select_one(".posicion")
+        pos = int(pos_el.get_text(strip=True)) if pos_el and pos_el.get_text(strip=True).isdigit() else i + 1
+
+        # Extract form badges before stripping team container
+        form_nodes = tr_team.select(".clasi-racha")
+        form: list[dict[str, str]] = []
+        for fn in form_nodes:
+            cls = fn.get("class", [])
+            res = "W" if "won" in cls else "D" if "draw" in cls else "L" if "lost" in cls else "?"
+            form.append({"matchday": fn.get_text(strip=True), "result": res})
+
+        container = tr_team.select_one(".clasi-racha-container")
+        if container:
+            container.extract()
+        if pos_el:
+            pos_el.extract()
+        team_name = tr_team.get_text(strip=True)
+
+        rows.append(
+            {
+                "position": pos,
+                "team": team_name,
+                "total": _parse_row_stats(t_total[i]),
+                "home": _parse_row_stats(t_home[i]),
+                "away": _parse_row_stats(t_away[i]),
+                "form": form,
+                "formString": "".join(f["result"] for f in form),
+                "source": "futbolfantasy.com",
+            }
+        )
+    return rows
+
+
+def parse_team_set_pieces(html: str, slug: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "lxml")
+    team = LALIGA_TEAMS.get(slug, {"name": slug, "fullName": slug})
+    players: list[dict[str, Any]] = []
+
+    for el in soup.select("a.camiseta, .jugador.tipo_lista"):
+        name_el = el.select_one(".nombre") or el.get("data-nombre")
+        name = name_el.get_text(strip=True) if hasattr(name_el, "get_text") else (name_el or "")
+        if not name:
+            continue
+        p = el.get("data-bpp")
+        fd = el.get("data-bpfd")
+        fc = el.get("data-bpfc")
+        c = el.get("data-bpc")
+        players.append(
+            {
+                "name": name,
+                "penalties": int(p) if p and p.isdigit() else 0,
+                "directFouls": int(fd) if fd and fd.isdigit() else 0,
+                "indirectFouls": int(fc) if fc and fc.isdigit() else 0,
+                "corners": int(c) if c and c.isdigit() else 0,
+            }
+        )
+
+    # Deduplicate players by clean display name keeping maximum score
+    unique: dict[str, dict[str, Any]] = {}
+    for p in players:
+        clean = _clean_display_name(p["name"])
+        if not clean or _is_junk_name(clean):
+            continue
+        if clean not in unique:
+            unique[clean] = {**p, "name": clean}
+        else:
+            for k in ("penalties", "directFouls", "indirectFouls", "corners"):
+                if p[k] > unique[clean][k]:
+                    unique[clean][k] = p[k]
+
+    def _get_top3(key: str) -> list[str]:
+        candidates = [p for p in unique.values() if p[key] > 1000]
+        candidates.sort(key=lambda x: x[key], reverse=True)
+        return [c["name"] for c in candidates[:3]]
+
+    return {
+        "slug": slug,
+        "team": team["name"],
+        "fullName": team["fullName"],
+        "penalties": _get_top3("penalties"),
+        "directFouls": _get_top3("directFouls"),
+        "indirectFouls": _get_top3("indirectFouls"),
+        "corners": _get_top3("corners"),
+        "source": "futbolfantasy.com",
+    }
+
+
+def parse_sanctions_html(html: str) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "lxml")
+    rows: list[dict[str, Any]] = []
+    cards = soup.select(".elemento.sancionado, .elemento")
+    for card in cards:
+        if "sancionado" not in (card.get("class") or []):
+            continue
+        a = card.select_one("a.jugador") or card.select_one("a[href*='/jugadores/']")
+        name = a.get_text(strip=True) if a else ""
+        if len(name) < 2 and a is not None:
+            name = (a.get("href") or "").rsplit("/", 1)[-1].replace("-", " ").strip()
+        if len(name) < 2:
+            continue
+        detail = card.get_text(" ", strip=True).replace(name, "").strip()
+        team_header = card.find_previous("header")
+        team = team_header.get_text(strip=True) if team_header else None
+        rows.append(
+            {
+                "name": name,
+                "team": team,
+                "type": "sanctioned",
+                "reason": detail or "Sancionado por sanción / tarjetas",
+                "source": "futbolfantasy.com",
+            }
+        )
+    return rows
+
+
+def parse_apercibidos_html(html: str) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "lxml")
+    rows: list[dict[str, Any]] = []
+    cards = soup.select(".elemento.apercibido, .elemento")
+    for card in cards:
+        if "apercibido" not in (card.get("class") or []):
+            continue
+        a = card.select_one("a.jugador") or card.select_one("a[href*='/jugadores/']")
+        name = a.get_text(strip=True) if a else ""
+        if len(name) < 2 and a is not None:
+            name = (a.get("href") or "").rsplit("/", 1)[-1].replace("-", " ").strip()
+        if len(name) < 2:
+            continue
+        detail = card.get_text(" ", strip=True).replace(name, "").strip()
+        team_header = card.find_previous("header")
+        team = team_header.get_text(strip=True) if team_header else None
+        rows.append(
+            {
+                "name": name,
+                "team": team,
+                "type": "warned",
+                "reason": detail or "Apercibido de sanción (4 amarillas)",
+                "source": "futbolfantasy.com",
+            }
+        )
+    return rows
     team_map = _team_mapping(html)
     players: list[dict[str, Any]] = []
     chunks = html.split('class="elemento_jugador')

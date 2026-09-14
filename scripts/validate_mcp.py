@@ -15,7 +15,11 @@ from mcp.client.stdio import stdio_client
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
-PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+PYTHON = (
+    ROOT / ".venv" / "Scripts" / "python.exe"
+    if sys.platform == "win32"
+    else ROOT / ".venv" / "bin" / "python"
+)
 OUT = ROOT / "scripts" / "_validation_report.json"
 
 SECRET_RE = re.compile(
@@ -82,6 +86,14 @@ CASES: list[dict] = [
     {"name": "match_stats_1", "tool": "laliga_get_match_stats", "args": {"week": 1}},
     {"name": "match_stats_json", "tool": "laliga_get_match_stats", "args": {"week": 1, "response_format": "json"}},
     {"name": "balances", "tool": "laliga_calculate_rivals_balances", "args": {}},
+    {"name": "real_standings", "tool": "laliga_get_real_standings_and_form", "args": {}},
+    {"name": "real_standings_json", "tool": "laliga_get_real_standings_and_form", "args": {"response_format": "json"}},
+    {"name": "set_pieces_madrid", "tool": "laliga_get_set_piece_takers", "args": {"team": "real-madrid"}},
+    {"name": "set_pieces_all", "tool": "laliga_get_set_piece_takers", "args": {}},
+    {"name": "sanctions", "tool": "laliga_get_sanctions_and_cards", "args": {}},
+    {"name": "sanctions_filter", "tool": "laliga_get_sanctions_and_cards", "args": {"team": "Rayo"}},
+    {"name": "squad_aggregate_me", "tool": "laliga_get_squad_aggregate_stats", "args": {}},
+    {"name": "squad_aggregate_me_json", "tool": "laliga_get_squad_aggregate_stats", "args": {"response_format": "json"}},
 ]
 
 

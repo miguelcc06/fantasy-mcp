@@ -82,6 +82,49 @@ class FantasyClient:
             return response.text
         raise FantasyAPIError(f"Error de red: {last_error or 'timeout'}")
 
+    async def put(self, path: str, *, json_data: Any = None) -> Any:
+        await self.tokens.ensure_fresh(self._http)
+        url = path if path.startswith("http") else f"{API_BASE_URL}{path}"
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self._http.put(
+                    url,
+                    json=json_data,
+                    headers={
+                        "Authorization": f"Bearer {self.tokens.bearer()}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                continue
+            except httpx.HTTPError as exc:
+                last_error = exc
+                continue
+            if response.status_code == 401 and attempt == 0:
+                await self.tokens.refresh(self._http)
+                continue
+            if response.status_code in {429, 500, 502, 503} and attempt < 2:
+                continue
+            if response.status_code == 204 or not response.content:
+                return None
+            if response.status_code == 404:
+                raise FantasyAPIError("Recurso no encontrado (404).", 404)
+            if response.status_code >= 400:
+                raise FantasyAPIError(
+                    _describe_status(response.status_code),
+                    response.status_code,
+                )
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                return response.json()
+            return response.text
+        raise FantasyAPIError(f"Error de red: {last_error or 'timeout'}")
+
+    async def set_lineup(self, team_id: str, payload: dict[str, Any]) -> Any:
+        return unwrap(await self.put(f"{CMP}/teams/{team_id}/lineup", json_data=payload))
+
     async def current_user(self) -> dict[str, Any]:
         return unwrap(await self.get("/v4/user/me")) or {}
 

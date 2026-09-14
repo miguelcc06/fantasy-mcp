@@ -181,3 +181,56 @@ class OwnershipInput(BaseToolInput):
 class MarketHistoryInput(BaseToolInput):
     limit: Optional[int] = Field(default=40, description="Máximo de movimientos.", ge=1, le=200)
     query: Optional[str] = Field(default=None, description="Filtro por jugador o mánager.", max_length=120)
+
+
+class RealStandingsInput(BaseToolInput):
+    pass
+
+
+class SetPieceTakersInput(BaseToolInput):
+    team: Optional[str] = Field(
+        default=None,
+        description="Slug o nombre del equipo (ej. 'real-madrid', 'Barcelona'). Vacío = todos los 20 equipos.",
+        max_length=120,
+    )
+
+
+class SanctionsInput(BaseToolInput):
+    team: Optional[str] = Field(
+        default=None,
+        description="Filtrar por nombre o slug de equipo de LaLiga.",
+        max_length=120,
+    )
+
+
+class SquadAggregateStatsInput(BaseToolInput):
+    team_or_manager: Optional[str] = Field(
+        default=None,
+        description="ID de equipo fantasy, nombre de mánager o 'me' para el propio. Por defecto el usuario autenticado.",
+        max_length=120,
+    )
+
+
+class SetLineupInput(BaseToolInput):
+    formation: str = Field(
+        ...,
+        description="Formación táctica legal (ej. '3-5-2', '4-4-2', '4-3-3', '5-3-2', etc.).",
+        min_length=5,
+        max_length=10,
+    )
+    starters: list[str] = Field(
+        ...,
+        description="Lista de 11 IDs o nombres de jugadores titulares para la alineación.",
+        min_length=11,
+        max_length=11,
+    )
+    captain_id: Optional[str] = Field(
+        default=None,
+        description="ID o nombre del jugador designado como capitán (opcional según reglas de la liga).",
+        max_length=120,
+    )
+    bench: Optional[list[str]] = Field(
+        default=None,
+        description="Lista ordenada de IDs o nombres de suplentes (opcional).",
+        max_length=10,
+    )
