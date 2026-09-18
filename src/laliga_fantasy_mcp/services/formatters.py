@@ -109,7 +109,11 @@ def format_formation(value: Any) -> str:
         return ", ".join(format_formation(item) for item in value)
     if isinstance(value, dict):
         return format_formation(
-            value.get("tacticalFormation") or value.get("name") or value.get("key") or value.get("formation")
+            value.get("tacticalFormation")
+            or value.get("tactical_formation")
+            or value.get("name")
+            or value.get("key")
+            or value.get("formation")
         )
     text = str(value).strip()
     parts = [part.strip() for part in text.split(",")]
