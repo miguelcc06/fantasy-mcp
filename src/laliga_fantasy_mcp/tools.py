@@ -175,6 +175,220 @@ def _error(exc: Exception) -> str:
 
 LINEUP_SLOTS = ("goalkeeper", "defender", "midfield", "striker")
 SLOT_POSITION = {"goalkeeper": 1, "defender": 2, "midfield": 3, "striker": 4}
+LINEUP_PUT_EXTRAS = ("coach", "captain", "bench")
+
+
+def parse_tactical_formation(value: str) -> tuple[int, int, int] | None:
+    """Convierte '4-4-2' / '4,4,2' / '1-4-4-2' en (DEF, MED, DEL)."""
+    parts = [int(item) for item in value.replace("-", ",").split(",") if item.strip().isdigit()]
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    if len(parts) == 4:
+        return parts[1], parts[2], parts[3]
+    return None
+
+
+def lineup_player_team_id(item: dict[str, Any]) -> str | None:
+    """playerTeamId del slot de plantilla, nunca el id de catálogo (playerMaster)."""
+    master = item.get("playerMaster") if isinstance(item.get("playerMaster"), dict) else {}
+    master_id = master.get("id")
+    for key in ("playerTeamId", "id"):
+        raw = item.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        if key == "id" and master_id is not None and str(raw) == str(master_id):
+            continue
+        return str(raw)
+    return None
+
+
+def _slot_id(value: str) -> str | int:
+    text = str(value).strip()
+    return int(text) if text.isdigit() else text
+
+
+def build_lineup_put_payload(
+    *,
+    goalkeeper: list[str],
+    defender: list[str],
+    midfield: list[str],
+    striker: list[str],
+    formation: tuple[int, int, int],
+    captain_id: str | None = None,
+    bench_ids: list[str] | None = None,
+    coach_id: str | None = None,
+) -> dict[str, Any]:
+    """Body de PUT /teams/{id}/lineup usado por la app oficial.
+
+    GET devuelve `{formation: {tacticalFormation, goalkeeper:[{playerTeamId}...]}}`.
+    Reenviar esa forma provoca HTTP 500. El contrato de escritura es plano:
+
+        goalkeeper: id, defender/midfield/striker: [ids], tactical_formation: [D,M,F]
+
+    Capitán, banquillo y entrenador son premium; se omiten en ligas free.
+    """
+    if len(goalkeeper) != 1:
+        raise ValueError("La alineación debe contener exactamente 1 portero.")
+    payload: dict[str, Any] = {
+        "goalkeeper": _slot_id(goalkeeper[0]),
+        "defender": [_slot_id(item) for item in defender],
+        "midfield": [_slot_id(item) for item in midfield],
+        "striker": [_slot_id(item) for item in striker],
+        "tactical_formation": [formation[0], formation[1], formation[2]],
+    }
+    if captain_id:
+        payload["captain"] = str(captain_id)
+    if coach_id:
+        payload["coach"] = _slot_id(coach_id)
+    if bench_ids:
+        payload["bench"] = [_slot_id(item) for item in bench_ids]
+    return payload
+
+
+def _resolve_roster_entry(
+    query: str,
+    roster_by_id: dict[str, dict[str, Any]],
+    roster_by_name: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    q = str(query).strip()
+    match = roster_by_id.get(q) or roster_by_name.get(fold(q))
+    if match:
+        return match
+    folded = fold(q)
+    for name, entry in roster_by_name.items():
+        if folded and folded in name:
+            return entry
+    return None
+
+
+def prepare_set_lineup_payload(
+    roster: list[Any],
+    formation: str,
+    starters: list[str],
+    captain_id: str | None = None,
+    bench: list[str] | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    """Valida plantilla + formación y construye el body de PUT. Error en el 3er valor."""
+    roster_by_id: dict[str, dict[str, Any]] = {}
+    roster_by_name: dict[str, dict[str, Any]] = {}
+    for player in roster:
+        if not isinstance(player, dict):
+            continue
+        master = player.get("playerMaster") if isinstance(player.get("playerMaster"), dict) else player
+        pid = str(master.get("id") or player.get("id") or "")
+        ptid = lineup_player_team_id(player)
+        pname = fold(master.get("name") or player.get("name") or "")
+        pnick = fold(master.get("nickname") or player.get("nickname") or "")
+        entry = {
+            "player": player,
+            "id": pid,
+            "playerTeamId": ptid or "",
+            "name": master.get("nickname") or master.get("name") or player.get("name"),
+        }
+        if pid:
+            roster_by_id[pid] = entry
+        if ptid:
+            roster_by_id[ptid] = entry
+        if pname:
+            roster_by_name[pname] = entry
+        if pnick:
+            roster_by_name[pnick] = entry
+
+    resolved_starters: list[dict[str, Any]] = []
+    for item in starters:
+        match = _resolve_roster_entry(str(item), roster_by_id, roster_by_name)
+        if not match:
+            return None, [], f"Error: El jugador '{item}' no pertenece a tu plantilla."
+        if match in resolved_starters:
+            return None, [], f"Error: El jugador '{match['name']}' está duplicado en los titulares."
+        if not match["playerTeamId"]:
+            return None, [], (
+                f"Error: '{match['name']}' no tiene playerTeamId; no se puede alinear."
+            )
+        resolved_starters.append(match)
+
+    if len(resolved_starters) != 11:
+        return None, [], f"Error: Se requieren exactamente 11 titulares (recibidos {len(resolved_starters)})."
+
+    parsed = parse_tactical_formation(formation)
+    if parsed is None:
+        return None, [], (
+            f"Error: Formato de formación inválido '{formation}'. Usa ej. '4-4-2' o '3-5-2'."
+        )
+    exp_def, exp_mid, exp_str = parsed
+
+    by_pos: dict[str, list[dict[str, Any]]] = {
+        "goalkeeper": [],
+        "defender": [],
+        "midfield": [],
+        "striker": [],
+    }
+    for entry in resolved_starters:
+        player = entry["player"]
+        master = player.get("playerMaster") if isinstance(player.get("playerMaster"), dict) else player
+        pos = position_id(master.get("positionId") or player.get("positionId"))
+        if pos == 1:
+            by_pos["goalkeeper"].append(entry)
+        elif pos == 2:
+            by_pos["defender"].append(entry)
+        elif pos == 3:
+            by_pos["midfield"].append(entry)
+        elif pos == 4:
+            by_pos["striker"].append(entry)
+
+    if len(by_pos["goalkeeper"]) != 1:
+        return None, [], (
+            f"Error: La alineación debe contener exactamente 1 portero "
+            f"(tienes {len(by_pos['goalkeeper'])})."
+        )
+    if len(by_pos["defender"]) != exp_def:
+        return None, [], (
+            f"Error: La formación {formation} requiere {exp_def} defensas "
+            f"(seleccionados {len(by_pos['defender'])})."
+        )
+    if len(by_pos["midfield"]) != exp_mid:
+        return None, [], (
+            f"Error: La formación {formation} requiere {exp_mid} centrocampistas "
+            f"(seleccionados {len(by_pos['midfield'])})."
+        )
+    if len(by_pos["striker"]) != exp_str:
+        return None, [], (
+            f"Error: La formación {formation} requiere {exp_str} delanteros "
+            f"(seleccionados {len(by_pos['striker'])})."
+        )
+
+    captain_ptid: str | None = None
+    if captain_id:
+        cap_match = _resolve_roster_entry(str(captain_id), roster_by_id, roster_by_name)
+        if not cap_match:
+            return None, [], f"Error: El capitán '{captain_id}' no pertenece a tu plantilla."
+        if cap_match not in resolved_starters:
+            return None, [], "Error: El capitán debe ser uno de los 11 titulares."
+        captain_ptid = cap_match["playerTeamId"]
+
+    bench_ids: list[str] | None = None
+    if bench:
+        bench_ids = []
+        for item in bench:
+            match = _resolve_roster_entry(str(item), roster_by_id, roster_by_name)
+            if not match:
+                return None, [], f"Error: El suplente '{item}' no pertenece a tu plantilla."
+            if match in resolved_starters:
+                return None, [], f"Error: '{match['name']}' no puede estar en titulares y banquillo."
+            if not match["playerTeamId"]:
+                return None, [], f"Error: '{match['name']}' no tiene playerTeamId."
+            bench_ids.append(match["playerTeamId"])
+
+    payload = build_lineup_put_payload(
+        goalkeeper=[item["playerTeamId"] for item in by_pos["goalkeeper"]],
+        defender=[item["playerTeamId"] for item in by_pos["defender"]],
+        midfield=[item["playerTeamId"] for item in by_pos["midfield"]],
+        striker=[item["playerTeamId"] for item in by_pos["striker"]],
+        formation=parsed,
+        captain_id=captain_ptid,
+        bench_ids=bench_ids,
+    )
+    return payload, resolved_starters, None
 
 
 def _clone_lineup_item(item: dict[str, Any], *, slot: str | None = None) -> dict[str, Any]:
@@ -1544,7 +1758,8 @@ def register_tools(mcp: FastMCP) -> None:
     async def laliga_set_lineup(params: SetLineupInput) -> str:
         """Modifica la alineación activa del usuario (formación táctica, 11 titulares, capitán y suplentes).
 
-        Valida la formación legal, resuelve los IDs de jugadores y actualiza el XI activo en LaLiga Fantasy.
+        Valida la formación legal, resuelve los playerTeamId y hace PUT del XI
+        con el contrato plano de la app (tactical_formation + IDs, sin wrapper formation).
 
         Args:
             params (SetLineupInput): formation ('3-5-2', '4-4-2'), starters (11 IDs/nombres), captain_id y bench opcionales.
@@ -1557,116 +1772,48 @@ def register_tools(mcp: FastMCP) -> None:
             ctx = LeagueContext(client)
             league_id = await ctx.league_id(params.league_id)
             team_id = await ctx.my_team_id(league_id)
-            
-            # 1. Fetch own team and verify ownership of players
             team_data = await client.team(league_id, team_id)
             roster = _players_from_team(team_data)
-            roster_by_id = {}
-            roster_by_name = {}
-            for p in roster:
-                if not isinstance(p, dict):
-                    continue
-                pm = p.get("playerMaster") if isinstance(p.get("playerMaster"), dict) else p
-                pid = str(pm.get("id") or p.get("id") or "")
-                ptid = str(p.get("playerTeamId") or "")
-                pname = fold(pm.get("name") or p.get("name") or "")
-                pnick = fold(pm.get("nickname") or p.get("nickname") or "")
-                entry = {"player": p, "id": pid, "playerTeamId": ptid, "name": pm.get("name") or p.get("name")}
-                if pid:
-                    roster_by_id[pid] = entry
-                if ptid:
-                    roster_by_id[ptid] = entry
-                if pname:
-                    roster_by_name[pname] = entry
-                if pnick:
-                    roster_by_name[pnick] = entry
+            payload, resolved_starters, error = prepare_set_lineup_payload(
+                roster,
+                params.formation,
+                list(params.starters),
+                captain_id=params.captain_id,
+                bench=params.bench,
+            )
+            if error or payload is None:
+                return error or "Error: no se pudo construir la alineación."
+            try:
+                res = await client.set_lineup(team_id, payload)
+            except FantasyAPIError as exc:
+                if exc.status_code == 500:
+                    return (
+                        "Error: LaLiga Fantasy rechazó guardar la alineación (500). "
+                        "El endpoint PUT /teams/{id}/lineup sigue activo; el servidor "
+                        "falla si el body replica el JSON de GET (wrapper formation / "
+                        "tacticalFormation). Se envió el contrato plano de la app "
+                        f"(tactical_formation + IDs). {_error(exc)}"
+                    )
+                return _error(exc)
 
-            # 2. Resolve the 11 starters
-            resolved_starters = []
-            for item in params.starters:
-                q = str(item).strip()
-                match = roster_by_id.get(q) or roster_by_name.get(fold(q))
-                if not match:
-                    for k, v in roster_by_name.items():
-                        if fold(q) in k:
-                            match = v
-                            break
-                if not match:
-                    return f"Error: El jugador '{q}' no pertenece a tu plantilla."
-                if match in resolved_starters:
-                    return f"Error: El jugador '{match['name']}' está duplicado en los titulares."
-                resolved_starters.append(match)
-
-            if len(resolved_starters) != 11:
-                return f"Error: Se requieren exactamente 11 titulares (recibidos {len(resolved_starters)})."
-
-            # 3. Classify starters by position
-            by_pos: dict[str, list[dict[str, Any]]] = {
-                "goalkeeper": [],
-                "defender": [],
-                "midfield": [],
-                "striker": [],
-            }
-            for entry in resolved_starters:
-                p = entry["player"]
-                pm = p.get("playerMaster") if isinstance(p.get("playerMaster"), dict) else p
-                pos = position_id(pm.get("positionId") or p.get("positionId"))
-                if pos == 1:
-                    by_pos["goalkeeper"].append(entry)
-                elif pos == 2:
-                    by_pos["defender"].append(entry)
-                elif pos == 3:
-                    by_pos["midfield"].append(entry)
-                elif pos == 4:
-                    by_pos["striker"].append(entry)
-
-            # Validate formation counts
-            form_parts = [int(x) for x in params.formation.replace("-", ",").split(",") if x.strip().isdigit()]
-            if len(form_parts) == 3:
-                exp_def, exp_mid, exp_str = form_parts
-            elif len(form_parts) == 4:
-                # e.g. 1-4-4-2
-                exp_def, exp_mid, exp_str = form_parts[1], form_parts[2], form_parts[3]
-            else:
-                return f"Error: Formato de formación inválido '{params.formation}'. Usa ej. '4-4-2' o '3-5-2'."
-
-            if len(by_pos["goalkeeper"]) != 1:
-                return f"Error: La alineación debe contener exactamente 1 portero (tienes {len(by_pos['goalkeeper'])})."
-            if len(by_pos["defender"]) != exp_def:
-                return f"Error: La formación {params.formation} requiere {exp_def} defensas (seleccionados {len(by_pos['defender'])})."
-            if len(by_pos["midfield"]) != exp_mid:
-                return f"Error: La formación {params.formation} requiere {exp_mid} centrocampistas (seleccionados {len(by_pos['midfield'])})."
-            if len(by_pos["striker"]) != exp_str:
-                return f"Error: La formación {params.formation} requiere {exp_str} delanteros (seleccionados {len(by_pos['striker'])})."
-
-            # Build payload
-            tactical_formation = [exp_def, exp_mid, exp_str]
-            formation_payload = {
-                "tacticalFormation": tactical_formation,
-                "goalkeeper": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["goalkeeper"]],
-                "defender": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["defender"]],
-                "midfield": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["midfield"]],
-                "striker": [{"playerTeamId": x["playerTeamId"]} for x in by_pos["striker"]],
-                "coach": [],
-                "bench": {},
-            }
-            if params.captain_id:
-                cap_q = str(params.captain_id).strip()
-                cap_match = roster_by_id.get(cap_q) or roster_by_name.get(fold(cap_q))
-                if cap_match:
-                    formation_payload["captain"] = {"playerTeamId": cap_match["playerTeamId"]}
-
-            payload = {"formation": formation_payload}
-            res = await client.set_lineup(team_id, payload)
-            
             lines = [
-                f"# Alineación Guardada Exitosamente",
+                "# Alineación Guardada Exitosamente",
                 f"- Formación: {params.formation}",
                 f"- Titulares ({len(resolved_starters)}): {', '.join(x['name'] for x in resolved_starters)}",
             ]
-            if params.captain_id:
-                lines.append(f"- Capitán: {params.captain_id}")
-            return emit({"status": "success", "formation": params.formation, "starters": [x["name"] for x in resolved_starters], "raw": res}, params.response_format, "\n".join(lines))
+            if payload.get("captain"):
+                lines.append(f"- Capitán: {payload['captain']}")
+            return emit(
+                {
+                    "status": "success",
+                    "formation": params.formation,
+                    "starters": [item["name"] for item in resolved_starters],
+                    "payload": {key: value for key, value in payload.items() if key not in LINEUP_PUT_EXTRAS or value},
+                    "raw": res,
+                },
+                params.response_format,
+                "\n".join(lines),
+            )
         except Exception as exc:
             return _error(exc)
 

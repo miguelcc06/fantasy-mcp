@@ -90,10 +90,12 @@ class FantasyClient:
             try:
                 response = await self._http.put(
                     url,
+                    params={"x-lang": "es"},
                     json=json_data,
                     headers={
                         "Authorization": f"Bearer {self.tokens.bearer()}",
                         "Content-Type": "application/json",
+                        "x-lang": "es",
                     },
                 )
             except httpx.TimeoutException as exc:
@@ -105,17 +107,17 @@ class FantasyClient:
             if response.status_code == 401 and attempt == 0:
                 await self.tokens.refresh(self._http)
                 continue
-            if response.status_code in {429, 500, 502, 503} and attempt < 2:
+            # No reintentar 500 en escrituras: suele ser payload inválido y
+            # un reintento podría duplicar un cambio si el primero sí persistió.
+            if response.status_code in {429, 502, 503} and attempt < 2:
                 continue
-            if response.status_code == 204 or not response.content:
-                return None
-            if response.status_code == 404:
-                raise FantasyAPIError("Recurso no encontrado (404).", 404)
             if response.status_code >= 400:
                 raise FantasyAPIError(
-                    _describe_status(response.status_code),
+                    _describe_status(response.status_code, _response_detail(response)),
                     response.status_code,
                 )
+            if response.status_code == 204 or not response.content:
+                return None
             content_type = response.headers.get("content-type", "")
             if "json" in content_type:
                 return response.json()
@@ -123,7 +125,19 @@ class FantasyClient:
         raise FantasyAPIError(f"Error de red: {last_error or 'timeout'}")
 
     async def set_lineup(self, team_id: str, payload: dict[str, Any]) -> Any:
-        return unwrap(await self.put(f"{CMP}/teams/{team_id}/lineup", json_data=payload))
+        """Guarda el XI editable: PUT /v1/competition/{id}/teams/{team_id}/lineup.
+
+        El body de escritura NO es el JSON de GET. La app envía IDs planos y
+        `tactical_formation` en snake_case (sin wrapper `formation`).
+        """
+        extras = ("coach", "captain", "bench")
+        try:
+            return unwrap(await self.put(f"{CMP}/teams/{team_id}/lineup", json_data=payload))
+        except FantasyAPIError as exc:
+            base = {key: value for key, value in payload.items() if key not in extras}
+            if base != payload and exc.status_code and exc.status_code >= 400:
+                return unwrap(await self.put(f"{CMP}/teams/{team_id}/lineup", json_data=base))
+            raise
 
     async def current_user(self) -> dict[str, Any]:
         return unwrap(await self.get("/v4/user/me")) or {}
@@ -198,7 +212,24 @@ class FantasyClient:
         )
 
 
-def _describe_status(status: int) -> str:
+def _response_detail(response: httpx.Response) -> str | None:
+    raw = (response.text or "").strip()
+    if not raw:
+        return None
+    try:
+        data = response.json()
+    except Exception:
+        return raw[:280]
+    if isinstance(data, dict):
+        for key in ("message", "error", "detail", "title"):
+            value = data.get(key)
+            if value:
+                return str(value)[:280]
+        return str(data)[:280]
+    return str(data)[:280]
+
+
+def _describe_status(status: int, detail: str | None = None) -> str:
     mapping = {
         401: "Error: autenticación inválida o caducada. Renueva LALIGA_FANTASY_REFRESH_TOKEN en el .env.",
         403: "Error: acceso denegado a este recurso de la liga.",
@@ -207,4 +238,8 @@ def _describe_status(status: int) -> str:
         500: "Error: fallo del servidor de LaLiga Fantasy.",
         502: "Error: pasarela de LaLiga Fantasy no disponible.",
     }
-    return mapping.get(status, f"Error: la API respondió {status}.")
+    msg = mapping.get(status, f"Error: la API respondió {status}.")
+    cleaned = " ".join((detail or "").split())
+    if cleaned and cleaned.lower() not in {"internal server error", str(status)}:
+        return f"{msg} Detalle: {cleaned[:280]}"
+    return msg
