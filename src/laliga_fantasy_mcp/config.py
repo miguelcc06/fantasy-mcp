@@ -19,6 +19,13 @@ AUTH_TOKEN_URL = (
 COMPETITION_ID = os.getenv("LALIGA_FANTASY_COMPETITION_ID", "1")
 CMP = f"/v1/competition/{COMPETITION_ID}"
 
+# Política de pujas (LALIGA_FANTASY_BID_POLICY). Las tools releen el entorno con get_bid_policy().
+# readonly: prohibido crear y actualizar. update_own: solo actualizar pujas propias.
+# create_and_update: crear pujas nuevas y actualizar las existentes.
+BID_POLICY_DEFAULT = "update_own"
+VALID_BID_POLICIES = frozenset({"readonly", "update_own", "create_and_update"})
+LALIGA_FANTASY_BID_POLICY = os.getenv("LALIGA_FANTASY_BID_POLICY", BID_POLICY_DEFAULT)
+
 DEFAULT_WEB_CLIENT_ID = "6457fa17-1224-416a-b21a-ee6ce76e9bc0"
 DEFAULT_NATIVE_CLIENT_ID = "af88bcff-1157-40a0-b579-030728aacf0b"
 
@@ -126,3 +133,21 @@ ACTIVITY_LABELS = {
 }
 
 POSITION_NAMES = {1: "Portero", 2: "Defensa", 3: "Centrocampista", 4: "Delantero"}
+
+
+def get_bid_policy() -> str:
+    """Política efectiva de pujas.
+
+    Vacío o ausente equivale a ``update_own``. Un valor desconocido lanza ValueError
+    para no pujar con una configuración ambigua.
+    """
+    raw = os.getenv("LALIGA_FANTASY_BID_POLICY")
+    if raw is None or not raw.strip():
+        return BID_POLICY_DEFAULT
+    policy = raw.strip().lower()
+    if policy not in VALID_BID_POLICIES:
+        allowed = ", ".join(sorted(VALID_BID_POLICIES))
+        raise ValueError(
+            f"LALIGA_FANTASY_BID_POLICY={raw.strip()!r} no es válida. Usa: {allowed}."
+        )
+    return policy

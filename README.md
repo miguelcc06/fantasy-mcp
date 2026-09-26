@@ -1,6 +1,6 @@
 # laliga_fantasy_mcp
 
-Servidor MCP de **solo lectura** para [LaLiga Fantasy](https://fantasy.laliga.com). Permite a un agente (Cursor, OpenClaw u otro cliente MCP) consultar plantilla, mercado, rivales, onces probables y más, sin pujar ni cambiar alineaciones.
+Servidor MCP para [LaLiga Fantasy](https://fantasy.laliga.com). Permite a un agente (Cursor, OpenClaw u otro cliente MCP) consultar plantilla, mercado, rivales y onces probables, y —si la política lo permite— pujar o cambiar la alineación.
 
 ## Requisitos
 
@@ -22,6 +22,7 @@ LALIGA_FANTASY_TOKEN=...
 LALIGA_FANTASY_REFRESH_TOKEN=...
 LALIGA_FANTASY_CLIENT_ID=...
 LALIGA_FANTASY_LEAGUE_ID=   # opcional
+LALIGA_FANTASY_BID_POLICY=update_own   # readonly | update_own | create_and_update
 ```
 
 Si tienes LaLigaApp abierta y autenticada en el mismo PC:
@@ -96,6 +97,9 @@ El servidor renueva el JWT contra Azure AD B2C. Si el refresh caduca, genera uno
 | `laliga_get_sanctions_and_cards` | Jugadores sancionados federativamente y apercibidos (4 tarjetas amarillas) | Read-Only |
 | `laliga_get_squad_aggregate_stats` | Resumen estadístico agregado de plantilla (puntos, local/visitante, titularidades, minutos, tendencia 7d) | Read-Only |
 | `laliga_set_lineup` | Modificar la alineación activa del usuario (formación táctica, 11 titulares, capitán y suplentes) | Write |
+| `laliga_place_bid` | Colocar una puja nueva (`create_and_update`) | Write |
+| `laliga_update_bid` | Actualizar una puja activa del usuario (`update_own` o `create_and_update`) | Write |
+| `laliga_trim_sole_bids` | Bajar a precio de mercado + 1 las pujas en las que eres el único postor | Write |
 
 ## Skill del agente
 
@@ -105,4 +109,4 @@ El servidor renueva el JWT contra Azure AD B2C. Si el refresh caduca, genera uno
 
 - `.env` y `LaLigaApp/` están en `.gitignore`.
 - No se registran JWT en logs.
-- No hay tools de escritura (pujas, ventas, XI, cláusulas).
+- Las pujas respetan `LALIGA_FANTASY_BID_POLICY` (`readonly`, `update_own` o `create_and_update`). Por defecto solo se actualizan pujas ya hechas por el usuario.
