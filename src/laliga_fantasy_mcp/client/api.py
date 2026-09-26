@@ -1,4 +1,4 @@
-"""Cliente HTTP de solo lectura para fantasy-api.llt-services.com."""
+"""Cliente HTTP de fantasy-api.llt-services.com."""
 
 from __future__ import annotations
 
@@ -124,6 +124,48 @@ class FantasyClient:
             return response.text
         raise FantasyAPIError(f"Error de red: {last_error or 'timeout'}")
 
+    async def post(self, path: str, *, json_data: Any = None) -> Any:
+        await self.tokens.ensure_fresh(self._http)
+        url = path if path.startswith("http") else f"{API_BASE_URL}{path}"
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self._http.post(
+                    url,
+                    params={"x-lang": "es"},
+                    json=json_data,
+                    headers={
+                        "Authorization": f"Bearer {self.tokens.bearer()}",
+                        "Content-Type": "application/json",
+                        "x-lang": "es",
+                    },
+                )
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                continue
+            except httpx.HTTPError as exc:
+                last_error = exc
+                continue
+            if response.status_code == 401 and attempt == 0:
+                await self.tokens.refresh(self._http)
+                continue
+            # No reintentar 500 en escrituras: suele ser payload inválido y
+            # un reintento podría duplicar un cambio si el primero sí persistió.
+            if response.status_code in {429, 502, 503} and attempt < 2:
+                continue
+            if response.status_code >= 400:
+                raise FantasyAPIError(
+                    _describe_status(response.status_code, _response_detail(response)),
+                    response.status_code,
+                )
+            if response.status_code == 204 or not response.content:
+                return None
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                return response.json()
+            return response.text
+        raise FantasyAPIError(f"Error de red: {last_error or 'timeout'}")
+
     async def set_lineup(self, team_id: str, payload: dict[str, Any]) -> Any:
         """Guarda el XI editable: PUT /v1/competition/{id}/teams/{team_id}/lineup.
 
@@ -181,6 +223,58 @@ class FantasyClient:
 
     async def player_offer(self, league_id: str, player_team_id: str) -> Any:
         return unwrap(await self.get(f"{CMP}/league/{league_id}/playerTeam/{player_team_id}/offer"))
+
+    @staticmethod
+    def _offer_path(league_id: str, player_team_id: str, offer_id: str | None = None) -> str:
+        path = f"{CMP}/league/{league_id}/playerTeam/{player_team_id}/offer"
+        if offer_id:
+            path = f"{path}/{offer_id}"
+        return path
+
+    @staticmethod
+    def _offer_body(amount: int) -> dict[str, int]:
+        value = int(amount)
+        if value < 1:
+            raise ValueError("El importe de la puja debe ser un entero positivo en euros.")
+        return {"offer": value}
+
+    async def create_bid(self, league_id: str, player_team_id: str, amount: int) -> Any:
+        """Crea una puja: POST .../playerTeam/{id}/offer con {"offer": amount}."""
+        return unwrap(
+            await self.post(
+                self._offer_path(league_id, player_team_id),
+                json_data=self._offer_body(amount),
+            )
+        )
+
+    async def place_bid(self, league_id: str, player_team_id: str, amount: int) -> Any:
+        """Alias de create_bid."""
+        return await self.create_bid(league_id, player_team_id, amount)
+
+    async def update_bid(
+        self,
+        league_id: str,
+        player_team_id: str,
+        amount: int,
+        offer_id: str | None = None,
+    ) -> Any:
+        """Actualiza una puja: PUT .../offer o .../offer/{offer_id} con {"offer": amount}."""
+        return unwrap(
+            await self.put(
+                self._offer_path(league_id, player_team_id, offer_id),
+                json_data=self._offer_body(amount),
+            )
+        )
+
+    async def modify_bid(
+        self,
+        league_id: str,
+        player_team_id: str,
+        amount: int,
+        offer_id: str | None = None,
+    ) -> Any:
+        """Alias de update_bid."""
+        return await self.update_bid(league_id, player_team_id, amount, offer_id=offer_id)
 
     async def players(self) -> list[Any]:
         return extract_array(await self.get(f"{CMP}/players"))

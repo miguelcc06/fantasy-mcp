@@ -1,4 +1,4 @@
-"""Registro de tools MCP de solo lectura."""
+"""Registro de tools MCP de LaLiga Fantasy."""
 
 from __future__ import annotations
 
@@ -13,13 +13,14 @@ from pydantic_core import PydanticUndefined
 
 from laliga_fantasy_mcp.client.api import FantasyAPIError
 from laliga_fantasy_mcp.config import (
+    ACTIVITY_LABELS,
     CURRENT_LALIGA_SLUGS,
     DAILY_REWARD_FREE,
     LALIGA_TEAMS,
     POSITION_NAMES,
     STARTING_BUDGET,
     TEAM_VALUE_BID_BONUS,
-    ACTIVITY_LABELS,
+    get_bid_policy,
 )
 from laliga_fantasy_mcp.context import LeagueContext
 from laliga_fantasy_mcp.deps import api, ff
@@ -31,6 +32,7 @@ from laliga_fantasy_mcp.models.schemas import (
     LineupsInput,
     MarketHistoryInput,
     OwnershipInput,
+    PlaceBidInput,
     PlayerOffersInput,
     PlayerQueryInput,
     RealStandingsInput,
@@ -42,9 +44,19 @@ from laliga_fantasy_mcp.models.schemas import (
     SetPieceTakersInput,
     SquadAggregateStatsInput,
     TrendsInput,
+    TrimSoleBidsInput,
+    UpdateBidInput,
     WeekInput,
 )
 from laliga_fantasy_mcp.services.balances import compute_balances, load_activity, load_clause_snapshots
+from laliga_fantasy_mcp.services.bids import (
+    bid_policy_error,
+    build_trim_report,
+    extract_user_bid,
+    missing_player_team_id_error,
+    plan_sole_bid_trims,
+    resolve_bid_player,
+)
 from laliga_fantasy_mcp.services.formatters import (
     compact_week_stats,
     emit,
@@ -530,6 +542,197 @@ async def _slugs_from_calendar() -> list[str]:
     if len(slugs) < 10:
         return list(CURRENT_LALIGA_SLUGS)
     return slugs
+
+
+async def laliga_place_bid(params: PlaceBidInput) -> str:
+    """Coloca una puja nueva sobre un jugador del mercado.
+
+    Solo la política ``create_and_update`` lo permite. ``readonly`` y ``update_own``
+    rechazan la creación con un error que indica cómo cambiar LALIGA_FANTASY_BID_POLICY.
+
+    Args:
+        params (PlaceBidInput): player_team_id_or_name y amount en euros.
+
+    Returns:
+        str: Confirmación de la puja o error de política, resolución o API.
+    """
+    blocked = bid_policy_error("place")
+    if blocked:
+        return blocked
+    try:
+        client = api()
+        ctx = LeagueContext(client)
+        league_id = await ctx.league_id(params.league_id)
+        listing, player_team_id, error = resolve_bid_player(
+            await client.market(league_id),
+            params.player_team_id_or_name,
+        )
+        if error:
+            return error
+        if listing is not None and extract_user_bid(listing) is not None:
+            name = player_name(listing) or params.player_team_id_or_name
+            return (
+                f"Error: ya tienes una puja activa sobre {name}. "
+                "Usa laliga_update_bid para cambiar el importe."
+            )
+        missing = missing_player_team_id_error(listing, player_team_id, params.player_team_id_or_name)
+        if missing or not player_team_id:
+            return missing or "Error: no se pudo resolver el playerTeamId."
+        amount = int(params.amount)
+        result = await client.place_bid(league_id, player_team_id, amount)
+        policy = get_bid_policy()
+        name = player_name(listing) if listing else params.player_team_id_or_name
+        payload = {
+            "status": "placed",
+            "policy": policy,
+            "leagueId": league_id,
+            "player": name,
+            "playerId": player_id(listing) if listing else None,
+            "playerTeamId": player_team_id,
+            "amount": amount,
+            "raw": result,
+        }
+        lines = [
+            "# Puja registrada",
+            f"- Jugador: {name}",
+            f"- playerTeamId: {player_team_id}",
+            f"- Importe: {format_money(amount)}",
+            f"- Política: {policy}",
+        ]
+        return emit(payload, params.response_format, "\n".join(lines))
+    except Exception as exc:
+        return _error(exc)
+
+
+async def laliga_update_bid(params: UpdateBidInput) -> str:
+    """Actualiza el importe de una puja activa del usuario.
+
+    ``update_own`` y ``create_and_update`` lo permiten. ``readonly`` lo rechaza.
+    Exige que el mercado muestre una puja tuya sobre ese jugador.
+
+    Args:
+        params (UpdateBidInput): jugador, nuevo importe y offer_id opcional.
+
+    Returns:
+        str: Confirmación de la actualización o error de política, titularidad o API.
+    """
+    blocked = bid_policy_error("update")
+    if blocked:
+        return blocked
+    try:
+        client = api()
+        ctx = LeagueContext(client)
+        league_id = await ctx.league_id(params.league_id)
+        listing, player_team_id, error = resolve_bid_player(
+            await client.market(league_id),
+            params.player_team_id_or_name,
+        )
+        if error:
+            return error
+        if listing is None:
+            return (
+                f"Error: no hay una puja activa verificable sobre '{params.player_team_id_or_name}'. "
+                "Solo se actualizan pujas que ya figuran a tu nombre en el mercado."
+            )
+        user_bid = extract_user_bid(listing)
+        name = player_name(listing) or params.player_team_id_or_name
+        if user_bid is None:
+            return (
+                f"Error: no tienes una puja activa sobre {name}. "
+                "Con la política actual solo se actualizan pujas existentes del usuario."
+            )
+        missing = missing_player_team_id_error(listing, player_team_id, params.player_team_id_or_name)
+        if missing or not player_team_id:
+            return missing or "Error: no se pudo resolver el playerTeamId."
+        offer_id = params.offer_id or user_bid.get("offerId")
+        amount = int(params.amount)
+        result = await client.update_bid(league_id, player_team_id, amount, offer_id=offer_id)
+        policy = get_bid_policy()
+        payload = {
+            "status": "updated",
+            "policy": policy,
+            "leagueId": league_id,
+            "player": name,
+            "playerId": player_id(listing),
+            "playerTeamId": player_team_id,
+            "offerId": offer_id,
+            "previousAmount": user_bid.get("amount"),
+            "amount": amount,
+            "raw": result,
+        }
+        lines = [
+            "# Puja actualizada",
+            f"- Jugador: {name}",
+            f"- playerTeamId: {player_team_id}",
+            f"- Importe anterior: {format_money(user_bid.get('amount'))}",
+            f"- Importe nuevo: {format_money(amount)}",
+            f"- Política: {policy}",
+        ]
+        if offer_id:
+            lines.append(f"- offerId: {offer_id}")
+        return emit(payload, params.response_format, "\n".join(lines))
+    except Exception as exc:
+        return _error(exc)
+
+
+async def laliga_trim_sole_bids(params: TrimSoleBidsInput) -> str:
+    """Baja al mínimo las pujas en las que el usuario es el único postor.
+
+    Si ``numberOfBids`` es 1 y la puja es estrictamente mayor que el precio de
+    mercado + 1, la deja en ese importe. Si hay más pujas, o el usuario no ha
+    pujado, no modifica nada. ``dry_run`` solo informa.
+
+    Args:
+        params (TrimSoleBidsInput): dry_run opcional.
+
+    Returns:
+        str: Informe markdown o JSON de ajustes, omisiones y errores.
+    """
+    try:
+        policy = get_bid_policy()
+    except ValueError as exc:
+        return f"Error: {exc}"
+    if not params.dry_run:
+        blocked = bid_policy_error("update")
+        if blocked:
+            return blocked
+    try:
+        client = api()
+        ctx = LeagueContext(client)
+        league_id = await ctx.league_id(params.league_id)
+        planned, without_user_bid = plan_sole_bid_trims(await client.market(league_id))
+        adjusted: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for row in planned:
+            if row.get("action") != "trim":
+                skipped.append(row)
+                continue
+            if params.dry_run:
+                adjusted.append({**row, "action": "would_trim"})
+                continue
+            try:
+                raw = await client.update_bid(
+                    league_id,
+                    str(row["playerTeamId"]),
+                    int(row["targetBid"]),
+                    offer_id=row.get("offerId"),
+                )
+                adjusted.append({**row, "action": "trimmed", "raw": raw})
+            except Exception as exc:
+                errors.append({**row, "action": "error", "reason": _error(exc)})
+        payload, markdown = build_trim_report(
+            policy=policy,
+            dry_run=bool(params.dry_run),
+            league_id=league_id,
+            adjusted=adjusted,
+            skipped=skipped,
+            errors=errors,
+            without_user_bid=without_user_bid,
+        )
+        return emit(payload, params.response_format, markdown)
+    except Exception as exc:
+        return _error(exc)
 
 
 def register_tools(mcp: FastMCP) -> None:
@@ -1816,6 +2019,16 @@ def register_tools(mcp: FastMCP) -> None:
             )
         except Exception as exc:
             return _error(exc)
+
+    mcp.tool(name="laliga_place_bid", annotations=_ann_write("Colocar puja"))(
+        flatten(PlaceBidInput)(laliga_place_bid)
+    )
+    mcp.tool(name="laliga_update_bid", annotations=_ann_write("Actualizar puja"))(
+        flatten(UpdateBidInput)(laliga_update_bid)
+    )
+    mcp.tool(name="laliga_trim_sole_bids", annotations=_ann_write("Recortar pujas únicas"))(
+        flatten(TrimSoleBidsInput)(laliga_trim_sole_bids)
+    )
 
 
 def re_split_match(text: str) -> list[str]:

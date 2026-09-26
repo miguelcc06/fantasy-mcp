@@ -211,6 +211,51 @@ class SquadAggregateStatsInput(BaseToolInput):
     )
 
 
+class BidAmountInput(BaseToolInput):
+    player_team_id_or_name: str = Field(
+        ...,
+        description="playerTeamId, ID de jugador o nombre en el mercado (ej. '162', 'Pedri').",
+        min_length=1,
+        max_length=120,
+    )
+    amount: int = Field(
+        ...,
+        description="Importe de la puja en euros.",
+        ge=1,
+        le=10_000_000_000,
+    )
+
+
+class PlaceBidInput(BidAmountInput):
+    pass
+
+
+class UpdateBidInput(BidAmountInput):
+    offer_id: Optional[str] = Field(
+        default=None,
+        description="ID de la oferta a actualizar. Si se omite, se usa el de la puja activa del usuario.",
+        max_length=64,
+    )
+
+    @field_validator("offer_id")
+    @classmethod
+    def validate_offer_id(cls, value: str | None) -> str | None:
+        if value is None or value.strip() == "":
+            return None
+        if "/" in value or "\\" in value or ".." in value:
+            raise ValueError("offer_id no es válido")
+        return value.strip()
+
+
+class TrimSoleBidsInput(BaseToolInput):
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "Si es true, solo informa qué pujas únicas se bajarían a precio de mercado + 1, sin modificarlas."
+        ),
+    )
+
+
 class SetLineupInput(BaseToolInput):
     formation: str = Field(
         ...,
