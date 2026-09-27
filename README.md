@@ -1,4 +1,22 @@
-# laliga_fantasy_mcp
+<div align="center">
+  <img src="./assets/banner.png" width="100%" alt="fantasy-mcp banner" />
+
+  <br />
+  <br />
+
+  # ⚽ fantasy-mcp
+
+  **Servidor MCP para LaLiga Fantasy: plantilla, mercado, rivales, onces probables y pujas**
+
+  <p align="center">
+    <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
+    <img src="https://img.shields.io/badge/MCP-SDK-00C7B7?style=for-the-badge" alt="MCP SDK" />
+    <img src="https://img.shields.io/badge/HTTPX-0.27+-0B6F97?style=for-the-badge" alt="HTTPX 0.27+" />
+    <img src="https://img.shields.io/badge/LaLiga%20Fantasy-ok-EA0029?style=for-the-badge" alt="LaLiga Fantasy" />
+  </p>
+</div>
+
+---
 
 Servidor MCP para [LaLiga Fantasy](https://fantasy.laliga.com). Permite a un agente (Cursor, OpenClaw u otro cliente MCP) consultar plantilla, mercado, rivales y onces probables, y —si la política lo permite— pujar o cambiar la alineación.
 
