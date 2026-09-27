@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400" role="img" aria-labelledby="title desc">
+  <title id="title">fantasy-mcp</title>
+  <desc id="desc">A modern banner showing a LaLiga Fantasy tactical board connected to market tools.</desc>
+  <defs>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#121318"/>
+      <stop offset="1" stop-color="#222630"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#C7FF4A"/>
+      <stop offset="1" stop-color="#71E6FF"/>
+    </linearGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#FFFFFF" stroke-opacity=".055"/>
+    </pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity=".25"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="400" rx="20" fill="url(#ink)"/>
+  <rect width="1200" height="400" rx="20" fill="url(#grid)"/>
+  <circle cx="1110" cy="80" r="180" fill="#71E6FF" opacity=".06"/>
+  <circle cx="30" cy="360" r="190" fill="#C7FF4A" opacity=".055"/>
+
+  <!-- Tactical board -->
+  <g transform="translate(62 98)" filter="url(#shadow)">
+    <rect width="284" height="204" rx="14" fill="#F4F2EA"/>
+    <path d="M0 14A14 14 0 0 1 14 0h256a14 14 0 0 1 14 14v22H0z" fill="#DCDAD2"/>
+    <circle cx="18" cy="18" r="4" fill="#FF6B6B"/>
+    <circle cx="32" cy="18" r="4" fill="#F7C948"/>
+    <circle cx="46" cy="18" r="4" fill="#52D273"/>
+    <!-- pitch -->
+    <rect x="18" y="56" width="248" height="132" rx="8" fill="#17191F"/>
+    <line x1="142" y1="56" x2="142" y2="188" stroke="#FFFFFF" stroke-opacity=".22" stroke-width="2"/>
+    <circle cx="142" cy="122" r="22" fill="none" stroke="#FFFFFF" stroke-opacity=".16" stroke-width="2"/>
+    <rect x="18" y="98" width="16" height="48" rx="3" fill="none" stroke="#FFFFFF" stroke-opacity=".2" stroke-width="2"/>
+    <rect x="250" y="98" width="16" height="48" rx="3" fill="none" stroke="#FFFFFF" stroke-opacity=".2" stroke-width="2"/>
+    <!-- players as nodes -->
+    <path d="M62 96 L104 150 L148 104 L196 152 L242 108" stroke="#FFFFFF" stroke-opacity=".28" stroke-width="2" fill="none"/>
+    <circle cx="62" cy="96" r="7" fill="#C7FF4A"/>
+    <circle cx="104" cy="150" r="7" fill="#71E6FF"/>
+    <circle cx="148" cy="104" r="7" fill="#FF8066"/>
+    <circle cx="196" cy="152" r="7" fill="#71E6FF"/>
+    <circle cx="242" cy="108" r="7" fill="#C7FF4A"/>
+  </g>
+
+  <!-- Connector -->
+  <path d="M366 200H422" stroke="url(#signal)" stroke-width="3" stroke-dasharray="5 7"/>
+  <circle cx="422" cy="200" r="5" fill="#C7FF4A"/>
+
+  <!-- Identity -->
+  <g transform="translate(456 118)">
+    <rect width="55" height="24" rx="12" fill="#C7FF4A"/>
+    <text x="27.5" y="16" text-anchor="middle" fill="#14161B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="800">MCP</text>
+    <text x="0" y="76" fill="#F7F7F2" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="48" font-weight="800" letter-spacing="-2.2">fantasy</text>
+    <text x="0" y="111" fill="#A7ACB8" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="19" font-weight="500">Plantilla, mercado, rivales y pujas para LaLiga Fantasy.</text>
+    <g transform="translate(0 139)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">
+      <rect width="140" height="30" rx="15" fill="#FFFFFF" opacity=".08"/>
+      <text x="70" y="20" text-anchor="middle" fill="#D9DCE3">MERCADO + PUJAS</text>
+      <rect x="152" width="105" height="30" rx="15" fill="#FFFFFF" opacity=".08"/>
+      <text x="204.5" y="20" text-anchor="middle" fill="#D9DCE3">XI + ONCES</text>
+    </g>
+  </g>
+
+  <!-- Retrieval mark -->
+  <g transform="translate(1052 200)">
+    <circle r="54" fill="none" stroke="#FFFFFF" stroke-opacity=".11"/>
+    <circle cy="-29" r="10" fill="#C7FF4A"/>
+    <circle cx="-30" cy="22" r="10" fill="#71E6FF"/>
+    <circle cx="30" cy="22" r="10" fill="#FF8066"/>
+    <path d="M0-19L-24 14M0-19L24 14M-20 22h40" fill="none" stroke="#F7F7F2" stroke-width="3"/>
+    <circle r="8" fill="#F7F7F2"/>
+  </g>
+
+  <rect x="24" y="372" width="1152" height="2" rx="1" fill="url(#signal)" opacity=".8"/>
+</svg>
